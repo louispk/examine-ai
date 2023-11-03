@@ -1,0 +1,20 @@
+{
+    "principles": [
+      {
+        "name": "Reasoning 1",
+        "description": "The response selects the most appropriate reasoning strategy."
+      },
+      {
+        "name": "Reasoning 2",
+        "description": "Reasoning in the response is structured (e.g. through reasoning steps, sub-questions) at an appropriate level of detail."
+      },
+      {
+        "name": "Reasoning 3",
+        "description": "Statements in the response are made with appropriate levels of confidence or probability."
+      },
+      {
+        "name": "Reasoning 4",
+        "description": "Formal reasoning (e.g. using math, computer code) in the response is correct."
+      }
+    ]
+  }
