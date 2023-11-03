@@ -161,8 +161,8 @@ def main():
     with col2:
         st.subheader("Safeguard AI")
         if st.session_state.last_ai_response:
-            # st.write("Latest AI response to evaluate:")
-            # st.write(st.session_state.last_ai_response)
+            st.write("Latest AI response to evaluate:")
+            st.write(st.session_state.last_ai_response)
             if col2.button("Evaluate", key="evaluate"):
                 st.session_state.evaluate_safeguard = True
 
