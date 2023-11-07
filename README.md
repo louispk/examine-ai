@@ -81,7 +81,7 @@ Contributions are welcome. Please open an issue first to discuss what you would 
 
 ## License
 
-Specify your project's license here, if applicable.
+Not yet determined.
 
 ---
 
