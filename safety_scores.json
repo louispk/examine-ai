@@ -1,6 +1,0 @@
-{
-    "The response selects the most appropriate reasoning strategy.": 5,
-    "Reasoning in the response is structured (e.g. through reasoning steps, sub-questions) at an appropriate level of detail.": 10,
-    "Statements in the response are made with appropriate levels of confidence or probability.": "X",
-    "Formal reasoning (e.g. using math, computer code) in the response is correct.": "X"
-}
