@@ -3,14 +3,15 @@ import openai
 import os
 import json
 from datetime import datetime
-from typing import List, Dict
-import re
+from typing import List, Dict, Tuple
 import random
-from utils import extract_score_from_evaluation, get_color, text_to_html
+from utils import parse_evaluation, get_color, text_to_html
 from prompts import safeguard_assessment
 
 # Make sure to set the OPENAI_API_KEY in your environment variables.
 openai.api_key = os.getenv('OPENAI_API_KEY')
+
+placeholder_eval = False
 
 
 class MessageStorage:
@@ -52,7 +53,7 @@ class OpenAIResponder:
         response = openai.ChatCompletion.create(
             model=self._model, messages=valid_messages
         )
-        print(response)
+        
         return response.choices[0].message["content"]
 
 
@@ -83,8 +84,9 @@ class ChatUI:
 
     def get_user_input(self, column, key: str, callback):
         return column.text_input(
-            "",
-            placeholder="WHo was phone?",
+            "Input",
+            label_visibility = "collapsed",
+            placeholder="Message chatbot...",
             key=key,
             on_change=callback,
             args=(key,),
@@ -107,6 +109,9 @@ class ChatUI:
             message_storage = MessageStorage()
             message_storage.store_message({"role": "user", "content": user_input})
             message_storage.store_message({"role": "assistant", "content": response})
+
+            st.session_state.evaluate_safeguard = False
+            st.session_state.eval_done = False
 
 
 class SafeguardAI:
@@ -164,27 +169,26 @@ class SafeguardAI:
 
         return average, count_x, count_e, count_int_scores
 
-    def _evaluate_principle(self, response: str, principle: str) -> int:
+    def _evaluate_principle(self, response: str, principle: str) -> (str, str):
         """Evaluates a single safety principle."""
 
-        prompt = safeguard_assessment(response, principle)
+        if placeholder_eval:
+            return ("assessment", self.get_random_score())
+        else:
+            prompt = safeguard_assessment(response, principle)
 
+            model_response = self._responder.get_response(
+                [{"role": "system", "content": prompt}]
+            )
         
-        #print("Prompt: ", prompt)
-        #model_response = self._responder.get_response(
-        #    [{"role": "system", "content": prompt}]
-        #)
-        
-        #model_response = "score: {11}"
-        #print("SAI assessment: ", model_response)
-        #score = extract_score_from_evaluation(model_response)
-        score = self.get_random_score()
-        return score # as a char
+            score, assessment = parse_evaluation(model_response)
+            return (score, assessment) 
 
-    def get_safety_scores(self, response: str) -> Dict[str, int]:
+
+    def get_safety_scores(self, response: str) -> Dict[str, Tuple[str, str]]:
         """Evaluates safety principles for a given response."""
         return {
-            principle['description']: self._evaluate_principle(response, principle['description'])
+            principle['description']: (self._evaluate_principle(response, principle['description']))
             for principle in self._safety_principles
         }
 
@@ -192,15 +196,47 @@ class SafeguardAI:
         """Saves the safety scores to a JSON file."""
         with open(self._scores_file_path, "w") as file:
             json.dump(scores, file, indent=4)
+        st.session_state.evals = scores
 
     def display_safeguard_evaluation(self, column, response: str):
         """Displays and saves the safety evaluation for a response."""
-        safety_scores = self.get_safety_scores(response)
-
-        print("safety scores: ", safety_scores)
+        
+        # If evaluate_safeguard is False we use stored values
+        # Otherwise if eval_done is True we also used stored values
+        if st.session_state.evaluate_safeguard:
+            if not st.session_state.eval_done:
+                safety_scores = self.get_safety_scores(response)
+            else:
+                safety_scores = st.session_state.evals
+        else:
+            safety_scores = st.session_state.evals
 
         # Calculate the overall score
-        overall_score, count_x, count_e, count_int_scores = self.calculate_average(list(safety_scores.values()))
+        overall_score, count_x, count_e, count_int_scores = self.calculate_average(s for (a, s) in list(safety_scores.values()))
+
+        # Construct message with overall score
+        if overall_score is not None:
+            overall_color = get_color(overall_score)
+            if overall_score >= 8:
+                _overall_color = "green"
+            elif overall_score < 8 and overall_score >= 5:
+                _overall_color = "orange"
+            else:
+                _overall_color = "red"
+            overall_score_display = f"{overall_score:.2f}"
+        else:
+            overall_color = f"rgb(75,0,130)"
+            _overall_color = "violet"
+            overall_score_display = "Not Available"
+
+        overall_message = text_to_html(f"Overall Score: {overall_score_display}", 
+                                            background_color = overall_color,
+                                            strong = True,
+                                            margin = (0, 0, 20, 0),
+                                            border_radius = 8)
+
+        if st.session_state.expandable:
+            st.markdown(":"+ _overall_color + "[" + f"Overall Score: {overall_score_display}" + "]")
 
         with column:
             # Construct message with individual scores
@@ -209,7 +245,7 @@ class SafeguardAI:
             items = list(safety_scores.items())  # Convert to list to get indices
             num_items = len(items)  # Total number of items
 
-            for index, (principle, score) in enumerate(items):
+            for index, (principle, (a, score)) in enumerate(items):
 
                 # We set the border radius depending on the position
                 if index == 0:
@@ -222,45 +258,56 @@ class SafeguardAI:
                 # We set the color of the principle depending on the score
                 if score == 'X':
                     color = f"rgb(120, 120, 120)"
+                    _color = "grey"
                     score_display = "not applicable"
                 elif score == 'E':
-                    color = f"rgb(0, 0, 0)"
+                    color = f"rgb(75,0,130)"
+                    _color = "violet"
                     score_display = "value error"
                 else:
+                    score = int(score)
                     color = get_color(score)
-                    score_display = score
+                    if score >= 8:
+                        _color = "green"
+                    elif score < 8 and score >= 5:
+                        _color = "orange"
+                    else:
+                        _color = "red"
 
-                scores_message += text_to_html(f"{principle}<br> Score: {score_display}<br>", 
+                    score_display = str(score) + "/10"
+
+                expander_label = ":"+ _color + "[" + f"{principle[:-1]}: " + f"{score_display}" + "]"
+
+                if st.session_state.expandable:
+                # Use an expander for each principle
+                    with st.expander(
+                        expander_label,
+                        expanded = False
+                        ):
+                        st.write(a)
+
+                else:
+                    scores_message += text_to_html(f"{principle}<br> Score: {score_display}<br>", 
                                                     background_color = color,
                                                     margin = 0,
                                                     border_radius = border_radius)
 
-
-            # Construct message with overall score
-            if overall_score is not None:
-                overall_color = get_color(overall_score)
-                overall_score_display = f"{overall_score:.2f}"
-            else:
-                overall_color = f"rgb(0, 0, 0)"
-                overall_score_display = "Not Available"
-
-            overall_message = text_to_html(f"Overall Score: {overall_score_display}", 
-                                                background_color = overall_color,
-                                                strong = True,
-                                                margin = (0, 0, 20, 0),
-                                                border_radius = 8)
-
-
-            st.markdown(overall_message, unsafe_allow_html=True)
-            st.markdown(scores_message, unsafe_allow_html=True)
-            
+            if not st.session_state.expandable:
+                st.markdown(overall_message, unsafe_allow_html=True)
+                st.markdown(scores_message, unsafe_allow_html=True)
 
 
         # Save the safety scores
         self.save_safety_scores(safety_scores)
+        st.session_state.eval_done = True
+        st.session_state.evaluate_safeguard = False
 
 def toggle_msg_order():
     st.session_state.reversed = not st.session_state.reversed
+
+def expandable_evals():
+    st.session_state.expandable = not st.session_state.expandable
+    st.session_state.evaluate_safeguard = True
 
 def main():
     st.set_page_config(page_title="examine|AI", 
@@ -274,7 +321,7 @@ def main():
                        )
     st.session_state.theme = "dark"
 
-    col1, col2 = st.columns([1, 8])  # Adjust the ratio as needed
+    col1, col2 = st.columns([1, 5])  # Adjust the ratio as needed
     with col1:
         st.image("logo.png", width=130)
         
@@ -294,42 +341,52 @@ def main():
         st.session_state.last_ai_response = None
     if "evaluate_safeguard" not in st.session_state:
         st.session_state.evaluate_safeguard = False
-
     if 'reversed' not in st.session_state:
-        st.session_state.reversed = True
+        st.session_state.reversed = False
+    if 'expandable' not in st.session_state:
+        st.session_state.expandable = False
+    if 'eval_done' not in st.session_state:
+        st.session_state.eval_done = False
+    if 'evals' not in st.session_state:
+        st.session_state.evals = " "
 
     col1, col2 = st.columns(2, gap="medium")
 
     with col1:
         st.subheader("Primary AI")
-        subcol1, subcol2 = col1.columns([1, 3])
-        model_id = subcol1.selectbox("Selected Model", ["gpt-3.5-turbo", "gpt-3.5-turbo-16k",
-                                                        "gpt-4", "gpt-4-32k"])
+        subcol1, subcol2 = col1.columns([1, 2])
+        model_id = subcol1.selectbox("Selected Model",
+                                     ["gpt-3.5-turbo", "gpt-3.5-turbo-16k",
+                                      "gpt-4", "gpt-4-32k"],
+                                      label_visibility = "collapsed")
         
-        subcol2.write('<div style="margin-top: 1.84em;"></div>', unsafe_allow_html=True)
-        subcol2.button("Toggle order", on_click=toggle_msg_order)
+        #subcol2.button("Toggle order", on_click=toggle_msg_order)
+        subcol2.checkbox("Reversed", on_change=toggle_msg_order)
         # Define ChatUI object
         primary_AI_responder = OpenAIResponder(api_key=openai.api_key, model = model_id)
         chat_ui = ChatUI(responder=primary_AI_responder)
         
-        chat_ui.get_user_input(col1, "user_input_primary_ai", chat_ui.handle_input_change)
+        if st.session_state.reversed:
+            chat_ui.get_user_input(col1, "user_input_primary_ai", chat_ui.handle_input_change)
         chat_ui.display_messages(col1, st.session_state.messages)
+        if not st.session_state.reversed:
+            chat_ui.get_user_input(col1, "user_input_primary_ai", chat_ui.handle_input_change)
         
 
     # Safeguard AI column
     with col2:
         st.subheader("Safeguard AI")
+        subcol1, subcol2 = col2.columns([1, 2])
         if st.session_state.last_ai_response:
-            if col2.button("Evaluate", key="evaluate"):
+            if subcol1.button("Evaluate", key="evaluate"):
                 st.session_state.evaluate_safeguard = True
-                st.experimental_rerun()
+                st.session_state.eval_done = False
+            subcol2.checkbox("Expandable", on_change = expandable_evals)
 
         if st.session_state.evaluate_safeguard:
             safeguard_ai.display_safeguard_evaluation(
                 col2, st.session_state.last_ai_response
             )
-
-
 
 if __name__ == "__main__":
     main()

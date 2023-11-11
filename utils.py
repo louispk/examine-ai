@@ -1,23 +1,38 @@
-    
+import re
 
-def extract_score_from_evaluation(text):
+def parse_evaluation(text):
+    score_str = 'E'
     # Regex pattern to match {0} to {10}
-    pattern = r"\{([0-9]|10|X)\}"
+    pattern = r"(?<!\d)(\d+|X)(?!\d)"
     matches = re.findall(pattern, text)
     
     if matches:
         # Return the last match
         score = matches[-1]
-        if score != 'X':
+
+        if score == 'X':
+            score_str = 'X'
+        else:
             try:
                 int_score = round(float(score))
+                if int_score < 0 or int_score > 10:
+                    score_str = "not in range"
+                else:
+                    score_str = str(int_score)
             except:
-                return 'E'
-            if int_score < 0 or int_score > 10:
-                return "not in range"
-        return score
+                score_str = 'E'
+
+    # We obtain the assessment
+    # Split the text at the last occurrence of the word "score" (case insensitive)
+    parts = re.split(r'(?i)(score)', text)
+    if len(parts) > 1:
+        # The assessment is everything up to the last "score"
+        assessment = ''.join(parts[:-2])  # Join all but the last part
     else:
-        return 'E' # Error since no score was obtained
+        # If "score" is not found, the whole text is the assessment
+        assessment = text
+
+    return assessment, score_str
 
 
 def text_to_html(text, border_radius = 0, padding = 10, margin = 0,
