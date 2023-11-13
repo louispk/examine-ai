@@ -7,11 +7,13 @@ from typing import List, Dict, Tuple
 import random
 from utils import parse_evaluation, get_color, text_to_html
 from prompts import safeguard_assessment
+import time
 
 # Make sure to set the OPENAI_API_KEY in your environment variables.
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
 placeholder_eval = False
+placeholder_response = True
 
 
 class MessageStorage:
@@ -66,21 +68,22 @@ class ChatUI:
 
     @staticmethod
     def display_messages(column, messages: List[Dict[str, str]]):
+        print("displaying messages")
+        print(messages)
         #"""Displays messages in a Streamlit chat."""
         if st.session_state.reversed:
             sorted_messages = reversed(messages)
         else:
             sorted_messages = messages
-        for message in sorted_messages:
-            with column:
+        with column:
+            for message in sorted_messages:
                 role = message["role"]
-                with st.container():
-                    if role == "user":
-                        with st.chat_message("user"):
-                            st.write(message['content'])
-                    else:
-                        with st.chat_message("assistant"):
-                            st.write(message['content'])
+                if role == "user":
+                    with st.chat_message("user"):
+                        st.write(message['content'])
+                else:
+                    with st.chat_message("assistant"):
+                        st.write(message['content'])
 
     def get_user_input(self, column, key: str, callback):
         return column.text_input(
@@ -92,26 +95,59 @@ class ChatUI:
             args=(key,),
         )
 
-    def handle_input_change(self, column_key: str):
+    def process_user_input(self, column_key: str):
         user_input = st.session_state[column_key]
         if user_input:  # Proceed only if the user has entered text
             # Append the user message to the conversation
+            print("user input saved")
             st.session_state.messages.append({"role": "user", "content": user_input})
             # Clear the input box after the message is sent
             st.session_state[column_key] = ""
-
-            # Fetch and store the response
-            response = self.responder.get_response(st.session_state.messages)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.session_state["last_ai_response"] = response
-
             # Store the messages using MessageStorage
             message_storage = MessageStorage()
             message_storage.store_message({"role": "user", "content": user_input})
-            message_storage.store_message({"role": "assistant", "content": response})
 
+            # we remove the last evaluation on new user input
             st.session_state.evaluate_safeguard = False
             st.session_state.eval_done = False
+            
+            # we hide the user input until we receive the response
+            st.session_state.show_user_input = False
+
+            # we need to process the user input we received
+            st.session_state.user_input_to_be_processed = True
+
+    def process_AI_response(self, column_key: str):
+        print("processing AI response")
+
+        # Fetch and store the response
+        if not placeholder_response:
+            response = self.responder.get_response(st.session_state.messages)
+        else:
+            time.sleep(2)
+            response = "Test Response Please Ignore 420"
+        print("AI response saved")
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state["last_ai_response"] = response
+
+        # Store the messages using MessageStorage
+        message_storage = MessageStorage()
+        message_storage.store_message({"role": "assistant", "content": response})
+
+        # We reset this
+        st.session_state.user_input_to_be_processed = False
+        # we received response
+        st.session_state.AI_response_received = True
+        # we deactivate the spinner 
+        st.session_state.waiting_for_AI_response = False
+        # we show the user input again
+        st.session_state.show_user_input = True
+
+        print("waiting_for_AI_response = False")
+        print("show_user_input = True")
+
+
+        print("response processed")
 
 
 class SafeguardAI:
@@ -337,9 +373,9 @@ def main():
     
     # Initialize session state
     MessageStorage()  # Ensures messages are initialized in session state
-    if "last_ai_response" not in st.session_state:
+    if 'last_ai_response' not in st.session_state:
         st.session_state.last_ai_response = None
-    if "evaluate_safeguard" not in st.session_state:
+    if 'evaluate_safeguard' not in st.session_state:
         st.session_state.evaluate_safeguard = False
     if 'reversed' not in st.session_state:
         st.session_state.reversed = False
@@ -349,6 +385,16 @@ def main():
         st.session_state.eval_done = False
     if 'evals' not in st.session_state:
         st.session_state.evals = " "
+    if 'user_input_to_be_processed' not in st.session_state:
+        st.session_state.user_input_to_be_processed = False
+    if 'show_user_input' not in st.session_state:
+        st.session_state.show_user_input = True
+    if 'disable_user_input' not in st.session_state:
+        st.session_state.disable_user_input = False
+    if 'waiting_for_AI_response' not in st.session_state:
+        st.session_state.waiting_for_AI_response = False
+    if 'AI_response_received' not in st.session_state:
+        st.session_state.AI_response_received = False
 
     col1, col2 = st.columns(2, gap="medium")
 
@@ -365,13 +411,39 @@ def main():
         # Define ChatUI object
         primary_AI_responder = OpenAIResponder(api_key=openai.api_key, model = model_id)
         chat_ui = ChatUI(responder=primary_AI_responder)
-        
+
+        # We put the input below or above the messages depending on the reversed status
         if st.session_state.reversed:
-            chat_ui.get_user_input(col1, "user_input_primary_ai", chat_ui.handle_input_change)
+            if st.session_state.waiting_for_AI_response:
+                with st.spinner("waiting"):
+                    # we draw the convo again here so it is
+                    # visible while spinner spins
+                    chat_ui.display_messages(col1, st.session_state.messages)
+                    # now that we have the user input we process the AI response
+                    chat_ui.process_AI_response(col1)
+            if st.session_state.show_user_input:
+                chat_ui.get_user_input(col1, "user_input_primary_ai_top", chat_ui.process_user_input)
         chat_ui.display_messages(col1, st.session_state.messages)
         if not st.session_state.reversed:
-            chat_ui.get_user_input(col1, "user_input_primary_ai", chat_ui.handle_input_change)
-        
+            if st.session_state.waiting_for_AI_response:
+                with st.spinner("waiting"):
+                    # now that we have the user input we process the AI response
+                    chat_ui.process_AI_response(col1)
+            if st.session_state.show_user_input:
+                chat_ui.get_user_input(col1, "user_input_primary_ai_bottom", chat_ui.process_user_input)
+
+        if st.session_state.user_input_to_be_processed:
+            # process the AI response
+            st.session_state.waiting_for_AI_response = True
+            print("rerun to activate spinner")
+            st.rerun()        
+
+        # we do a rerun after receiving the AI response
+        # to redraw chat without the chat in the with st.spinner("waiting")
+        if st.session_state.AI_response_received:
+            st.session_state.AI_response_received = False
+            st.rerun();
+
 
     # Safeguard AI column
     with col2:
