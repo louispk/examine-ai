@@ -161,3 +161,4 @@ cython_debug/
 **/.DS_Store
 chat_history.json
 safety_scores.json
+main_log.log

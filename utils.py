@@ -3,14 +3,17 @@ import re
 def parse_evaluation(text):
     score_str = 'E'
     # Regex pattern to match {0} to {10}
-    pattern = r"(?<!\d)(\d+|X)(?!\d)"
+    #pattern = r"(?<!\d)(\d+|X)(?!\d)"
+    pattern = r"\b\d+\b(?=\.\s|\s|$)|\bnot available\b"
     matches = re.findall(pattern, text)
     
     if matches:
+        print("matches")
         # Return the last match
         score = matches[-1]
+        print("found: ", score)
 
-        if score == 'X':
+        if score == 'not available':
             score_str = 'X'
         else:
             try:
@@ -22,15 +25,8 @@ def parse_evaluation(text):
             except:
                 score_str = 'E'
 
-    # We obtain the assessment
-    # Split the text at the last occurrence of the word "score" (case insensitive)
-    parts = re.split(r'(?i)(score)', text)
-    if len(parts) > 1:
-        # The assessment is everything up to the last "score"
-        assessment = ''.join(parts[:-2])  # Join all but the last part
-    else:
-        # If "score" is not found, the whole text is the assessment
-        assessment = text
+    # we just return the whole text as the assessment
+    assessment = text
 
     return assessment, score_str
 

@@ -7,14 +7,15 @@ from typing import List, Dict, Tuple
 import random
 from utils import parse_evaluation, get_color, text_to_html
 from prompts import safeguard_assessment
-import time
 import logging
+import time
 
 # Make sure to set the OPENAI_API_KEY in your environment variables.
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
-placeholder_eval = False
-placeholder_response = False
+# for testing
+placeholder_eval = True
+placeholder_response = True
 
 # Configure logger
 logging.basicConfig(
@@ -57,6 +58,7 @@ class OpenAIResponder:
     def __init__(self, api_key: str, model: str = "gpt-3.5-turbo"):
         self._api_key = api_key
         self._model = model
+        #self._temperature = 
 
     def get_response(self, messages: List[Dict[str, str]]) -> str:
         """Fetches a response from OpenAI using the given list of message dictionaries."""
@@ -80,57 +82,74 @@ class ChatUI:
         self.responder = responder
 
     @staticmethod
+    def get_text_input(container):
+        print("get_text_input")
+        if True:
+        #if st.session_state.show_user_input:
+            #print("showing user input")
+            container.text_input(
+                "Input2",
+                label_visibility = "collapsed",
+                placeholder="Message chatbot...",
+                key="chatui_text_input",
+                on_change=ChatUI.add_user_input,
+                args=("chatui_text_input",),
+                #disabled=st.session_state.disable_input
+            )
+
+    @staticmethod
     def display_messages(column, messages: List[Dict[str, str]]):
+        print("displaying messages")
         #"""Displays messages in a Streamlit chat."""
-        if st.session_state.reversed:
-            sorted_messages = reversed(messages)
-        else:
-            sorted_messages = messages
-        with column:
-            for message in sorted_messages:
+        #if st.session_state.reversed:
+        #    sorted_messages = reversed(messages)
+        #else:
+        #    sorted_messages = messages
+        sorted_messages = messages
+
+        for message in sorted_messages:
+            with column:
                 role = message["role"]
-                if role == "user":
-                    with st.chat_message("user"):
-                        st.write(message['content'])
-                else:
-                    with st.chat_message("assistant"):
-                        st.write(message['content'])
-
-    def get_user_input(self, column, key: str, callback):
-        return column.text_input(
-            "Input",
-            label_visibility = "collapsed",
-            placeholder="Message chatbot...",
-            key=key,
-            on_change=callback,
-            args=(key,),
-            disabled=st.session_state.disable_user_input,
-        )
-
-    def process_user_input(self, column_key: str):
-        user_input = st.session_state[column_key]
+                with st.container():
+                    if role == "user":
+                        with st.chat_message("user"):
+                            st.write(message['content'])
+                    else:
+                        with st.chat_message("assistant"):
+                            st.write(message['content'])
+    
+    @staticmethod
+    def add_user_input(key: str):
+        print("add_user_input")
+        user_input = st.session_state[key]
         if user_input:  # Proceed only if the user has entered text
+            print("user_input = ", user_input)
+
             # Append the user message to the conversation
             st.session_state.messages.append({"role": "user", "content": user_input})
+
             # Clear the input box after the message is sent
-            st.session_state[column_key] = ""
-            # Store the messages using MessageStorage
+            st.session_state[key] = ""
+
+            # Store the message using MessageStorage
             message_storage = MessageStorage()
             message_storage.store_message({"role": "user", "content": user_input})
-            
-            # we hide the user input until we receive the response
-            st.session_state.show_user_input = False
 
-            # we need to process the user input we received
-            st.session_state.user_input_to_be_processed = True
+            st.session_state.user_input_inserted_into_messages = True
 
-    def process_AI_response(self, column_key: str):
+
+    @staticmethod
+    def process_input(column_key: str):
+        print("processing input")
+
         # Fetch and store the response
         if not placeholder_response:
             response = self.responder.get_response(st.session_state.messages)
         else:
-            time.sleep(0)
-            response = "Test Response Please Ignore 420"
+            time.sleep(2)
+            response = "Zimbabwe is a landlocked country located in southern Africa. It is bordered by South Africa to the south, Botswana to the west and southwest, Mozambique to the east and northeast, and Zambia to the northwest. Harare is the capital and largest city of Zimbabwe."
+        
+        # add message to state
         st.session_state.messages.append({"role": "assistant", "content": response})
         st.session_state["last_ai_response"] = response
 
@@ -138,14 +157,12 @@ class ChatUI:
         message_storage = MessageStorage()
         message_storage.store_message({"role": "assistant", "content": response})
 
-        # We reset this
-        st.session_state.user_input_to_be_processed = False
-        # we received response
-        st.session_state.AI_response_received = True
-        # we deactivate the spinner 
-        st.session_state.waiting_for_AI_response = False
-        # we show the user input again
         st.session_state.show_user_input = True
+        st.session_state.process_input = False
+
+        st.session_state.there_is_an_AI_response_to_evaluate = True
+        st.session_state.AI_response_ready_to_be_displayed = True
+
 
 
 class SafeguardAI:
@@ -205,18 +222,20 @@ class SafeguardAI:
 
     def _evaluate_principle(self, response: str, principle: str) -> (str, str):
         """Evaluates a single safety principle."""
+        #print("_evaluate_principle")
 
         if placeholder_eval:
-            time.sleep(1)
+            time.sleep(0.5)
             return ("assessment", self.get_random_score())
         else:
             prompt = safeguard_assessment(response, principle)
+            logger.info(prompt)
 
             model_response = self._responder.get_response(
                 [{"role": "system", "content": prompt}]
             )
             logger.info(model_response)
-        
+
             score, assessment = parse_evaluation(model_response)
             return (score, assessment) 
 
@@ -232,60 +251,59 @@ class SafeguardAI:
         """Saves the safety scores to a JSON file."""
         with open(self._scores_file_path, "w") as file:
             json.dump(scores, file, indent=4)
-        st.session_state.evals = scores
+        st.session_state.last_stored_evaluations = scores
 
-    def obtain_safeguard_evaluation(self, response: str):
+    def get_safeguard_evaluation(self, column, response: str):
         """Obtains and saves the safety evaluation for a response."""
-        safety_scores = self.get_safety_scores(response)
 
-        # Save the safety scores
+        # we get new evals and scores
+        safety_scores = self.get_safety_scores(response)
+        # we save the new new evals and scores
         self.save_safety_scores(safety_scores)
+        
+        #print("get eval False, show eval True")
+        #st.session_state.get_safeguard_eval = False
+        #st.session_state.show_safeguard_eval = True
+        #print("st.session_state.show_safeguard_eval = True")
+
 
     def display_safeguard_evaluation(self, column):
-        """Displaysthe safety evaluation for a response."""
-
-        # we first create the placeholder containers 
-        # so that we are able to remove the contents when we want
-        containers = []
-        container_nr = len(st.session_state.evals) + 2
-        for index in range(container_nr):
-            container = column.empty()
-            containers.append(container)
-        containers.reverse()
+        """Displays and saves the safety evaluation for a response."""
         
-        if st.session_state.display_evaluation:
-            
-            safety_scores = st.session_state.evals
+        # we get the evaluations from state
+        safety_scores = st.session_state.last_stored_evaluations
 
-            # Calculate the overall score
-            overall_score, count_x, count_e, count_int_scores = self.calculate_average(s for (a, s) in list(safety_scores.values()))
+        # Calculate the overall score
+        overall_score, count_x, count_e, count_int_scores = self.calculate_average(s for (a, s) in list(safety_scores.values()))
 
-            # Construct message with overall score
-            if overall_score is not None:
-                overall_color = get_color(overall_score)
-                if overall_score >= 8:
-                    _overall_color = "green"
-                elif overall_score < 8 and overall_score >= 5:
-                    _overall_color = "orange"
-                else:
-                    _overall_color = "red"
-                overall_score_display = f"{overall_score:.2f}"
+        # Construct message with overall score
+        if overall_score is not None:
+            overall_color = get_color(overall_score)
+            if overall_score >= 8:
+                _overall_color = "green"
+            elif overall_score < 8 and overall_score >= 5:
+                _overall_color = "orange"
             else:
-                overall_color = f"rgb(75,0,130)"
-                _overall_color = "violet"
-                overall_score_display = "Not Available"
+                _overall_color = "red"
+            overall_score_display = f"{overall_score:.2f}"
+        else:
+            overall_color = f"rgb(75,0,130)"
+            _overall_color = "violet"
+            overall_score_display = "Not Available"
 
-            html_scores = text_to_html(f"Overall Score: {overall_score_display}", 
-                                                background_color = overall_color,
-                                                strong = True,
-                                                margin = (0, 0, 20, 0),
-                                                border_radius = 8)
-            
-            if st.session_state.expandable:
-                container = containers.pop()
-                container.markdown(":"+ _overall_color + "[" + f"Overall Score: {overall_score_display}" + "]")
+        overall_message = text_to_html(f"Overall Score: {overall_score_display}", 
+                                       background_color = overall_color,
+                                       strong = True,
+                                       margin = (0, 0, 20, 0),
+                                       border_radius = 8)
+        
+        if st.session_state.expandable:
+            column.markdown(":"+ _overall_color + "[" + f"Overall Score: {overall_score_display}" + "]")
 
-            
+        with column:
+            # Construct message with individual scores
+            scores_message = ""
+
             items = list(safety_scores.items())  # Convert to list to get indices
             num_items = len(items)  # Total number of items
 
@@ -323,35 +341,34 @@ class SafeguardAI:
                 expander_label = ":"+ _color + "[" + f"{principle[:-1]}: " + f"{score_display}" + "]"
 
                 if st.session_state.expandable:
-                    container = containers.pop()
-                    # Use an expander for each principle
-                    with container.expander(
+                # Use an expander for each principle
+                    with st.expander(
                         expander_label,
                         expanded = False
                         ):
                         st.write(a)
 
                 else:
-                    html_scores += text_to_html(f"{principle}<br> Score: {score_display}<br>", 
+                    scores_message += text_to_html(f"{principle}<br> Score: {score_display}<br>", 
                                                     background_color = color,
                                                     margin = 0,
                                                     border_radius = border_radius)
-
-
-
-
-
+            
             if not st.session_state.expandable:
-                container.markdown(html_scores, unsafe_allow_html=True)
+                if st.session_state.show_safeguard_eval:
+                    #print("339")
+                    column.markdown(overall_message, unsafe_allow_html=True)
+                    column.markdown(scores_message, unsafe_allow_html=True)
 
-        # if we don't display the evaluations we empty the containers
-        else: 
-            for container in containers:
-                container.empty()
 
+        st.session_state.eval_done = True
 
 def toggle_msg_order():
     st.session_state.reversed = not st.session_state.reversed
+
+def expandable_evals():
+    st.session_state.expandable = not st.session_state.expandable
+    #st.session_state.show_safeguard_eval = True
 
 def main():
     st.set_page_config(page_title="examine|AI", 
@@ -381,32 +398,30 @@ def main():
     
     # Initialize session state
     MessageStorage()  # Ensures messages are initialized in session state
-    if 'last_ai_response' not in st.session_state:
-        st.session_state.last_ai_response = None
-    if 'evaluate_pressed' not in st.session_state:
-        st.session_state.evaluate_pressed = False
-    if 'disable_eval_button' not in st.session_state:
-        st.session_state.disable_eval_button = False
-    if 'obtain_evaluation' not in st.session_state:
-        st.session_state.obtain_evaluation = False
-    if 'display_evaluation' not in st.session_state:
-        st.session_state.display_evaluation = False
-    if 'reversed' not in st.session_state:
-        st.session_state.reversed = False
-    if 'expandable' not in st.session_state:
-        st.session_state.expandable = False
-    if 'evals' not in st.session_state:
-        st.session_state.evals = " "
-    if 'user_input_to_be_processed' not in st.session_state:
-        st.session_state.user_input_to_be_processed = False
-    if 'show_user_input' not in st.session_state:
-        st.session_state.show_user_input = True
-    if 'disable_user_input' not in st.session_state:
-        st.session_state.disable_user_input = False
-    if 'waiting_for_AI_response' not in st.session_state:
-        st.session_state.waiting_for_AI_response = False
-    if 'AI_response_received' not in st.session_state:
-        st.session_state.AI_response_received = False
+    if "there_is_an_AI_response_to_evaluate" not in st.session_state:
+        st.session_state.there_is_an_AI_response_to_evaluate = False
+    if "last_received_AI_response" not in st.session_state:
+        st.session_state.last_received_AI_response = None
+    if "user_input_is_disabled" not in st.session_state:
+        st.session_state.user_input_is_disabled = False
+    if "get_safeguard_evaluations" not in st.session_state:
+        st.session_state.get_safeguard_evaluations = False
+    if "last_stored_evaluations" not in st.session_state:
+        st.session_state.last_stored_evaluations = None
+    if "show_safeguard_evaluations" not in st.session_state:
+        st.session_state.show_safeguard_evaluations = False
+    if "user_input_inserted_into_messages" not in st.session_state:
+        st.session_state.user_input_inserted_into_messages = False
+    if "process_user_input" not in st.session_state:
+        st.session_state.process_user_input = False
+    if "AI_response_ready_to_be_displayed" not in st.session_state:
+        st.session_state.AI_response_ready_to_be_displayed = False
+
+        
+
+        
+
+    
 
     col1, col2 = st.columns(2, gap="medium")
 
@@ -416,98 +431,79 @@ def main():
         model_id = subcol1.selectbox("Selected Model",
                                      ["gpt-3.5-turbo", "gpt-3.5-turbo-16k",
                                       "gpt-4", "gpt-4-32k"],
-                                      label_visibility = "collapsed",
-                                      disabled=st.session_state.disable_user_input)
+                                      label_visibility = "collapsed")
         
-        subcol2.checkbox("Reversed", 
-                         on_change=toggle_msg_order,
-                         disabled=st.session_state.disable_user_input)
         # Define ChatUI object
         primary_AI_responder = OpenAIResponder(api_key=openai.api_key, model = model_id)
         chat_ui = ChatUI(responder=primary_AI_responder)
+        
+            
+        ChatUI.display_messages(col1, st.session_state.messages)
 
-        # We put the input below or above the messages depending on the reversed status
-        if st.session_state.reversed:
-            if st.session_state.waiting_for_AI_response:
-                with st.spinner("AI is thinking"):
-                    # we draw the convo again here so it is
-                    # visible while spinner spins
-                    chat_ui.display_messages(col1, st.session_state.messages)
-                    # now that we have the user input we process the AI response
-                    chat_ui.process_AI_response(col1)
-            if st.session_state.show_user_input:
-                chat_ui.get_user_input(col1, "user_input_primary_ai_top", chat_ui.process_user_input)
-        chat_ui.display_messages(col1, st.session_state.messages)
-        if not st.session_state.reversed:
-            if st.session_state.waiting_for_AI_response:
-                with st.spinner("AI is thinking"):
-                    # now that we have the user input we process the AI response
-                    chat_ui.process_AI_response(col1)
-            if st.session_state.show_user_input:
-                chat_ui.get_user_input(col1, "user_input_primary_ai_bottom", chat_ui.process_user_input)
+        
+        if st.session_state.process_user_input:
+            st.session_state.process_user_input = False
+            chat_ui.process_input(col1)
 
-        if st.session_state.user_input_to_be_processed:
-            st.session_state.display_evaluation = False
-            # process the AI response
-            st.session_state.waiting_for_AI_response = True
-            st.rerun()        
+        ChatUI.get_text_input(col1)
 
-        # we do a rerun after receiving the AI response
-        # to redraw chat without the chat in the with st.spinner("waiting")
-        if st.session_state.AI_response_received:
-            st.session_state.AI_response_received = False
-            st.rerun()
+        if st.session_state.user_input_inserted_into_messages:
+            st.session_state.user_input_inserted_into_messages = False
+            st.session_state.process_user_input = True
+            st.rerun();
 
+
+        if st.session_state.AI_response_ready_to_be_displayed:
+            st.session_state.AI_response_ready_to_be_displayed = False
+            st.rerun();
+        
 
     # Safeguard AI column
     with col2:
         st.subheader("Safeguard AI")
         subcol1, subcol2 = col2.columns([1, 2])
-        if st.session_state.last_ai_response:
-            if subcol1.button("Evaluate", 
-                              key="evaluate", 
-                              disabled=st.session_state.disable_eval_button
-                              ):
-                st.session_state.disable_eval_button = True
-                st.session_state.evaluate_pressed = True
-                st.session_state.disable_eval_button = True
-            if subcol2.checkbox("Expandable", 
-                             disabled=st.session_state.disable_eval_button
-                             ):
-                st.session_state.expandable = True
-            else:
-                st.session_state.expandable = False
-        
-        # we handle eval display conditions inside the function
-        safeguard_ai.display_safeguard_evaluation(col2)
+        if st.session_state.there_is_an_AI_response_to_evaluate:
+            if subcol1.button("Evaluate", key="evaluate"):
+                print("pressed eval")
+                st.session_state.user_input_is_disabled = True
 
-        if st.session_state.evaluate_pressed:
-            # we remove eisting evals
-            st.session_state.display_evaluation = False
-            # we only want one rerun
-            st.session_state.evaluate_pressed = False
-            # we disbale user input after evaluate is pressed
-            st.session_state.disable_user_input = True
-            # we do the actual evaluation during next run
-            st.session_state.obtain_evaluation = True
+                st.session_state.get_safeguard_evaluations = True
 
-            st.rerun()
+                #st.session_state.eval_done = False
+                #print("st.session_state.eval_done False")
+                st.rerun()
+                
+            #subcol2.checkbox("Expandable", on_change = expandable_evals)
 
-        if st.session_state.obtain_evaluation:
-            with st.spinner("Waiting for evaluations"):
-                safeguard_ai.obtain_safeguard_evaluation(
-                    st.session_state.last_ai_response
-                )
-            # we reenable user input after evaluations are shown
-            st.session_state.disable_user_input = False
-            # we reset this abter we obtained the evaluations
-            st.session_state.obtain_evaluation = False
-            # we can show the evaluation now
-            st.session_state.display_evaluation = True
-            # we reenable the eval button
-            st.session_state.disable_eval_button = False
+        if st.session_state.get_safeguard_evaluations:
+            safeguard_ai.get_safeguard_evaluation(
+                col2, st.session_state.last_received_AI_response
+            )
 
-            st.rerun()
+        #evals_container = col2.empty()
+
+        #if st.session_state.show_safeguard_eval:
+            #print("490")
+            #rerun = False
+            #if st.session_state.disable_input:
+            #    rerun = True
+        #safeguard_ai.display_safeguard_evaluation(evals_container)
+        if st.session_state.show_safeguard_evaluations:
+            safeguard_ai.display_safeguard_evaluation(col2)
+            st.session_state.user_input_is_disabled = False
+            #print("st.session_state.disable_input = False")
+            # we only rerun once to enable user input
+            #if rerun:
+            #    st.rerun()
+        #else:
+        #    if st.session_state.clear_safeguard_eval:
+        #        #print("clear eval")
+        #        evals_container.empty()
+        #        #st.session_state.process_input = True
+        #        st.session_state.clear_safeguard_eval = False
+        #        st.rerun()
+            
 
 if __name__ == "__main__":
     main()
+    
