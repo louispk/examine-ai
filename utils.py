@@ -1,4 +1,5 @@
 import re
+import random
 
 def parse_evaluation(text):
     score_str = 'E'
@@ -8,10 +9,8 @@ def parse_evaluation(text):
     matches = re.findall(pattern, text)
     
     if matches:
-        print("matches")
         # Return the last match
         score = matches[-1]
-        print("found: ", score)
 
         if score == 'not available':
             score_str = 'X'
@@ -100,4 +99,37 @@ def get_color(score):
 
     except ValueError:
         return "rgb(0, 0, 0)"  # Black color for invalid scores
+
+def calculate_average(values):
+    int_values = []
+    count_x = 0
+    count_e = 0
+    count_int_scores = 0
+
+    for value in values:
+        if value == 'X':
+            count_x += 1
+        elif value == 'E':
+            count_e += 1
+        else:
+            try:
+                # Convert to float and round to integer, count as an integer score
+                int_value = round(float(value))
+                int_values.append(int_value)
+                count_int_scores += 1
+            except ValueError:
+                # Handle the case where the value is not a number
+                print(f"Value '{value}' is not a valid number and will be ignored.")
+
+    # Calculate the average if the list of integers is not empty
+    average = sum(int_values) / len(int_values) if int_values else None
+
+    return average, count_x, count_e, count_int_scores
+
+def get_random_score():
+    # Define the list of possible scores
+    possible_scores = list(range(11)) + ['X', 'E']
+    
+    # Randomly select and return one score
+    return random.choice(possible_scores)
 
