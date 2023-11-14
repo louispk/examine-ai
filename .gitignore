@@ -162,3 +162,4 @@ cython_debug/
 chat_history.json
 safety_scores.json
 main_log.log
+cmds.txt
