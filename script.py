@@ -13,8 +13,12 @@ import logging
 # Make sure to set the OPENAI_API_KEY in your environment variables.
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
-placeholder_eval = True
-placeholder_response = True
+# set to True to use placeholder evals
+placeholder_eval = False
+# set to True to use placeholder response
+placeholder_response = False
+# set to true to see a toast with response details
+show_message_toast = False
 
 # Configure logger
 logging.basicConfig(
@@ -34,48 +38,105 @@ class MessageStorage:
     A class for storing chat messages with a timestamp to a file.
     """
 
-    def __init__(self, file_path: str = "chat_history.json"):
+    def __init__(self, file_path: str = 'chat_history.json'):
         self._file_path = file_path
         self._initialize_messages()
 
     def _initialize_messages(self):
-        if "messages" not in st.session_state:
+        if 'messages' not in st.session_state:
             st.session_state.messages = []
 
     def store_message(self, message: Dict[str, str]):
         """Stores a message dictionary with a timestamp to a JSON file."""
-        message_with_timestamp = {"timestamp": datetime.now().isoformat(), **message}
-        with open(self._file_path, "a") as f:
+        message_with_timestamp = {'timestamp': datetime.now().isoformat(), **message}
+        with open(self._file_path, 'a') as f:
             json.dump(message_with_timestamp, f)
-            f.write("\n")
+            f.write('\n')
 
 
 class OpenAIResponder:
     """
     A class to handle responses from OpenAI's GPT model.
     """
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo"):
+    def __init__(self, api_key: str, model: str = 'gpt-3.5-turbo'):
         self._api_key = api_key
         self._model = model
 
-    def get_response(self, messages: List[Dict[str, str]]) -> str:
+    def get_response(self, messages: List[Dict[str, str]]) -> (str, str):
         """Fetches a response from OpenAI using the given list of message dictionaries."""
-        valid_messages = [
-            msg
-            for msg in messages
-            if msg["role"] in ["system", "assistant", "user", "function"]
-        ]
-        response = openai.ChatCompletion.create(
-            model=self._model, messages=valid_messages
-        )
-        
-        return response.choices[0].message["content"]
+        content = ''
+        status = 'ERR'
+        details = None
+        try:
+            valid_messages = [
+                {'role': msg['role'], 'content': msg['content']}
+                for msg in messages
+                if msg['role'] in ['system', 'assistant', 'user', 'function']
+            ]
+            response = openai.ChatCompletion.create(
+                model=self._model, messages=valid_messages
+            )
+
+            details = {}
+            details['finish_reason'] = response.choices[0].finish_reason
+            details['created'] = response.created
+            details['id'] = response.id 
+            details['model'] = response.model
+            details['usage'] = response.usage
+
+            status = 'OK' if details['finish_reason'] == 'stop' else 'WARN'
+            return response.choices[0].message['content'], status, details
+
+        except openai.error.Timeout as e:
+            #Handle timeout error, e.g. retry or log
+            content = f"OpenAI API request timed out: {e}"
+        except openai.error.APIError as e:
+            #Handle API error, e.g. retry or log
+            content = f"OpenAI API returned an API Error: {e}"
+        except openai.error.APIConnectionError as e:
+            #Handle connection error, e.g. check network or log
+            content = f"OpenAI API request failed to connect: {e}"
+        except openai.error.InvalidRequestError as e:
+            #Handle invalid request error, e.g. validate parameters or log
+            content = f"OpenAI API request was invalid: {e}"
+        except openai.error.AuthenticationError as e:
+            #Handle authentication error, e.g. check credentials or log
+            content = f"OpenAI API request was not authorized: {e}"
+        except openai.error.PermissionError as e:
+            #Handle permission error, e.g. check scope or log
+            content = f"OpenAI API request was not permitted: {e}"
+        except openai.error.RateLimitError as e:
+            #Handle rate limit error, e.g. wait or log
+            content = f"OpenAI API request exceeded rate limit: {e}"
+
+        print(content)
+        return content, status, details
+
+
 
 
 class ChatUI:
     """
     A class containing static methods for UI interactions.
     """
+
+    @staticmethod
+    def get_color(status : str):
+        mapping = {
+            'OK' : 'white',
+            'WARN' : 'orange', 
+            'ERR' : 'red'
+            }
+        color = mapping[status]
+        if color is None:
+            color = 'green'
+        return color
+
+    @staticmethod
+    def print_message(message : str):
+        color = ChatUI.get_color(message['status'])
+        st.markdown(":"+ color + "[" + message['content'] + "]")
+
     @staticmethod
     def display_messages(column, messages: List[Dict[str, str]]):
         #"""Displays messages in a Streamlit chat."""
@@ -85,32 +146,34 @@ class ChatUI:
             sorted_messages = messages
         with column:
             for message in sorted_messages:
-                role = message["role"]
-                if role == "user":
-                    with st.chat_message("user"):
+                role = message['role']
+                if role == 'user':
+                    with st.chat_message('user'):
                         st.write(message['content'])
+                elif role == 'assistant':
+                    with st.chat_message('assistant'):
+                        ChatUI.print_message(message)
                 else:
-                    with st.chat_message("assistant"):
+                    with st.chat_message(role):
                         st.write(message['content'])
     
     @staticmethod
     def display_chat_input(col, responder, top):
         if st.session_state.reversed == top:
             if st.session_state.waiting_for_AI_response:
-                with st.spinner("AI is thinking"):
+                with st.spinner('AI is thinking'):
                     # if we are above the messages we draw the convo 
                     # again here so it is visible while spinner spins
                     if top:
                         ChatUI.display_messages(col, st.session_state.messages)
                     # now that we have the user input we process the AI response
-                    ChatUI.process_AI_response(col, responder)
+                    ChatUI.process_AI_response(responder)
             if st.session_state.show_user_input:
-                key = "my_form_" + "top" if top else "bottom"
+                key = 'my_form_' + 'top' if top else 'bottom'
                 ChatUI.handle_user_input(key)
 
     @staticmethod
     def handle_user_input(key : str):
-        print("handle user input")
         with st.form(key=key):
             subcol1, subcol2 = st.columns([3, 1])
             user_input = subcol1.empty()
@@ -129,30 +192,34 @@ class ChatUI:
 
             # Check if the form has been submitted
             if submit_button:
-                print("submit button")
-                ChatUI.process_user_input("user_input_field")
+                ChatUI.process_user_input('user_input_field')
                 st.session_state.user_input = ''
 
             user_input.text_input(
-                "Input",
-                label_visibility = "collapsed",
-                placeholder="Message chatbot...",
-                key="user_input_field",
+                'Input',
+                label_visibility = 'collapsed',
+                placeholder='Message chatbot...',
+                key='user_input_field',
                 disabled=st.session_state.disable_user_input,
             )
 
     @staticmethod
-    def process_user_input(column_key: str):
-        print("process_user_input")
-        user_input = st.session_state[column_key]
+    def process_user_input(key: str):
+        user_input = st.session_state[key]
         if user_input:  # Proceed only if the user has entered text
             # Append the user message to the conversation
-            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.messages.append({
+                'role': 'user', 
+                'content': user_input
+                })
             # Clear the input box after the message is sent
-            st.session_state[column_key] = ""
+            st.session_state[key] = ''
             # Store the messages using MessageStorage
             message_storage = MessageStorage()
-            message_storage.store_message({"role": "user", "content": user_input})
+            message_storage.store_message({
+                'role': 'user', 
+                'content': user_input
+                })
             
             # we hide the user input until we receive the response
             st.session_state.show_user_input = False
@@ -160,19 +227,31 @@ class ChatUI:
             # we need to process the user input we received
             st.session_state.user_input_to_be_processed = True
 
-    def process_AI_response(column_key: str, responder):
+    def process_AI_response(responder):
         # Fetch and store the response
         if not placeholder_response:
-            response = responder.get_response(st.session_state.messages)
+            response, status, details = responder.get_response(st.session_state.messages)
         else:
             time.sleep(2)
-            response = "Test Response Please Ignore 420"
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        st.session_state["last_ai_response"] = response
+
+            response, status, details = "This is a placeholder response for testing.", 'OK', ''
+
+            status = random.choice(['OK', 'WARN', 'ERR'])
+        st.session_state.messages.append({
+            'role': 'assistant', 
+            'content': response, 
+            'status' : status
+            })
+        st.session_state.last_ai_response = response
+        st.session_state.last_ai_response_details = details
 
         # Store the messages using MessageStorage
         message_storage = MessageStorage()
-        message_storage.store_message({"role": "assistant", "content": response})
+        message_storage.store_message({
+            'role': 'assistant', 
+            'content': response, 
+            'status' : status
+            })
 
         # We reset this
         st.session_state.user_input_to_be_processed = False
@@ -192,8 +271,8 @@ class SafeguardAI:
     def __init__(
         self,
         responder: OpenAIResponder,
-        principles_file_path: str = "core_principles.json",
-        scores_file_path: str = "safety_scores.json",
+        principles_file_path: str = 'core_principles.json',
+        scores_file_path: str = 'safety_scores.json',
     ):
         self._responder = responder
         self._principles_file_path = principles_file_path
@@ -202,21 +281,21 @@ class SafeguardAI:
 
     def _load_safety_principles(self) -> List[str]:
         """Loads safety principles from a JSON file."""
-        with open(self._principles_file_path, "r") as file:
+        with open(self._principles_file_path, 'r') as file:
             principles = json.load(file)
-        return principles.get("principles", [])
+        return principles.get('principles', [])
 
     def _evaluate_principle(self, response: str, principle: str) -> (str, str):
         """Evaluates a single safety principle."""
 
         if placeholder_eval:
             time.sleep(0.5)
-            return ("assessment", get_random_score())
+            return ("assessment ... ", get_random_score())
         else:
             prompt = safeguard_assessment(response, principle)
 
             model_response = self._responder.get_response(
-                [{"role": "system", "content": prompt}]
+                [{'role': 'system', 'content': prompt}]
             )
             logger.info(model_response)
         
@@ -232,7 +311,7 @@ class SafeguardAI:
 
     def _save_safety_scores(self, scores: Dict[str, Tuple[str, str]]):
         """Saves the safety scores to a JSON file."""
-        with open(self._scores_file_path, "w") as file:
+        with open(self._scores_file_path, 'w') as file:
             json.dump(scores, file, indent=4)
         st.session_state.evals = scores
 
@@ -246,39 +325,39 @@ class SafeguardAI:
         # Construct message with overall score
         if overall_score is not None:
             if overall_score >= 8:
-                overall_color = "green"
+                overall_color = 'green'
             elif overall_score < 8 and overall_score >= 5:
-                overall_color = "orange"
+                overall_color = 'orange'
             else:
-                overall_color = "red"
+                overall_color = 'red'
             overall_score_display = f"{overall_score:.2f}"
         else:
-            overall_color = "violet"
+            overall_color = 'violet'
             overall_score_display = "Not Available"
 
-        column.markdown(":"+ overall_color + "[" + f"Overall Score: {overall_score_display}" + "]")
+        column.markdown(':'+ overall_color + '[' + f"Overall Score: {overall_score_display}" + ']')
 
         # we ennumerate over all principles and draw them one by one
         for index, (principle, (a, score)) in enumerate(list(safety_scores.items())):
             # We set the color of the principle depending on the score
             if score == 'X':
-                color = "grey"
-                score_display = "not applicable"
+                color = 'grey'
+                score_display = 'not applicable'
             elif score == 'E':
-                color = "violet"
-                score_display = "value error"
+                color = 'violet'
+                score_display = 'value error'
             else:
                 score = int(score)
                 if score >= 8:
-                    color = "green"
+                    color = 'green'
                 elif score < 8 and score >= 5:
-                    color = "orange"
+                    color = 'orange'
                 else:
-                    color = "red"
+                    color = 'red'
 
-                score_display = str(score) + "/10"
+                score_display = str(score) + '/10'
 
-            expander_label = ":"+ color + "[" + f"{principle[:-1]}: " + f"{score_display}" + "]"
+            expander_label = ':'+ color + '[' + f"{principle[:-1]}: " + f"{score_display}" + ']'
             # Use an expander for each principle
             with column.expander(
                 expander_label,
@@ -300,8 +379,8 @@ class SafeguardAI:
             overall_color = get_color(overall_score)
             overall_score_display = f"{overall_score:.2f}"
         else:
-            overall_color = f"rgb(75,0,130)"
-            overall_score_display = "Not Available"
+            overall_color = f'rgb(75,0,130)'
+            overall_score_display = 'Not Available'
 
         html_scores = text_to_html(
             f"Overall Score: {overall_score_display}", 
@@ -325,16 +404,16 @@ class SafeguardAI:
 
             # We set the color of the principle depending on the score
             if score == 'X':
-                color = f"rgb(120, 120, 120)"
-                score_display = "not applicable"
+                color = f'rgb(120, 120, 120)'
+                score_display = 'not applicable'
             elif score == 'E':
-                color = f"rgb(75,0,130)"
-                score_display = "value error"
+                color = f'rgb(75,0,130)'
+                score_display = 'value error'
             else:
                 score = int(score)
                 color = get_color(score)
 
-                score_display = str(score) + "/10"
+                score_display = str(score) + '/10'
 
             # we append html for each principle to html_scores
             html_scores += text_to_html(f"{principle}<br> Score: {score_display}<br>", 
@@ -364,20 +443,20 @@ def toggle_msg_order():
 
 
 def main():
-    st.set_page_config(page_title="examine|AI", 
-                       page_icon="🧞‍♂️", 
-                       layout="wide", 
+    st.set_page_config(page_title='examine|AI', 
+                       page_icon='🧞‍♂️', 
+                       layout='wide', 
                        menu_items={
-                           'Get Help': 'https://www.betterhelp.com/',
-                           'Report a bug': "https://wikiroulette.co/",
+                           'Get Help': "https://examine.dev/#building-ai-meta-systems",
+                           'Report a bug': "https://examine.dev/#team",
                            'About': "### ExamineAI 2023"
     }
                        )
-    st.session_state.theme = "dark"
+    st.session_state.theme = 'dark'
 
     col1, col2 = st.columns([1, 5])  # Adjust the ratio as needed
     with col1:
-        st.image("logo.png", width=130)
+        st.image('logo.png', width=130)
         st.markdown('''
                     <style>
                     button[title="View fullscreen"]{
@@ -398,51 +477,48 @@ def main():
     responder = OpenAIResponder(api_key=openai.api_key)
     safeguard_ai = SafeguardAI(responder)
     
+    # Ensures messages are initialized in session state
+    MessageStorage()  
     # Initialize session state
-    MessageStorage()  # Ensures messages are initialized in session state
-    if 'last_ai_response' not in st.session_state:
-        st.session_state.last_ai_response = None
-    if 'evaluate_pressed' not in st.session_state:
-        st.session_state.evaluate_pressed = False
-    if 'disable_eval_button' not in st.session_state:
-        st.session_state.disable_eval_button = False
-    if 'obtain_evaluation' not in st.session_state:
-        st.session_state.obtain_evaluation = False
-    if 'display_evaluation' not in st.session_state:
-        st.session_state.display_evaluation = False
-    if 'reversed' not in st.session_state:
-        st.session_state.reversed = False
-    if 'expandable' not in st.session_state:
-        st.session_state.expandable = False
-    if 'evals' not in st.session_state:
-        st.session_state.evals = " "
-    if 'user_input_to_be_processed' not in st.session_state:
-        st.session_state.user_input_to_be_processed = False
-    if 'show_user_input' not in st.session_state:
-        st.session_state.show_user_input = True
-    if 'disable_user_input' not in st.session_state:
-        st.session_state.disable_user_input = False
-    if 'waiting_for_AI_response' not in st.session_state:
-        st.session_state.waiting_for_AI_response = False
-    if 'AI_response_received' not in st.session_state:
-        st.session_state.AI_response_received = False
+    default_session_state = {
+          'last_ai_response': None,
+          'last_ai_response_details' : None,
+          'evaluate_pressed': False,
+          'disable_eval_button': False,
+          'obtain_evaluation': False,
+          'display_evaluation': False,
+          'reversed': False,
+          'expandable': False,
+          'evals': None,
+          'user_input_to_be_processed': False,
+          'show_user_input': True,
+          'disable_user_input': False,
+          'waiting_for_AI_response': False,
+          'AI_response_received': False,
+          'show_message_toast' : False,
+      }
+    for key, default_value in default_session_state.items():
+          if key not in st.session_state:
+              st.session_state[key] = default_value
 
-    col1, col2 = st.columns(2, gap="medium")
+    col1, col2 = st.columns(2, gap='medium')
 
     with col1:
-        st.subheader("Primary AI",
+        st.subheader('Primary AI',
                      anchor=False)
         subcol1, subcol2 = col1.columns([1, 2])
-        model_id = subcol1.selectbox("Selected Model",
-                                     ["gpt-3.5-turbo", "gpt-3.5-turbo-16k",
-                                      "gpt-4", "gpt-4-32k"],
-                                      label_visibility = "collapsed",
-                                      disabled=st.session_state.disable_user_input)
+        model_id = subcol1.selectbox('Selected Model',
+                                     ['gpt-3.5-turbo', 'gpt-3.5-turbo-16k',
+                                      'gpt-4', 'gpt-4-32k'],
+                                      label_visibility = 'collapsed',
+                                      disabled=st.session_state.disable_user_input
+                                      or not st.session_state.show_user_input)
         
-        subcol2.checkbox("Reversed", 
+        subcol2.checkbox('Reversed', 
                          on_change=toggle_msg_order,
-                         disabled=st.session_state.disable_user_input)
-        # Define ChatUI object
+                         disabled=st.session_state.disable_user_input
+                         or not st.session_state.show_user_input)
+        # Define Primary AI responder
         primary_AI_responder = OpenAIResponder(api_key=openai.api_key, model = model_id)
 
         # We put the input below or above the messages depending on the reversed status
@@ -453,17 +529,17 @@ def main():
         
     # Safeguard AI column
     with col2:
-        st.subheader("Safeguard AI",
+        st.subheader('Safeguard AI',
                      anchor=False)
         subcol1, subcol2 = col2.columns([1, 2])
         if st.session_state.last_ai_response:
-            if subcol1.button("Evaluate", 
-                              key="evaluate", 
+            if subcol1.button('Evaluate', 
+                              key='evaluate', 
                               disabled=st.session_state.disable_eval_button
                               ):
                 st.session_state.evaluate_pressed = True
                 st.session_state.disable_eval_button = True
-            if subcol2.checkbox("Expandable", 
+            if subcol2.checkbox('Expandable', 
                              disabled=st.session_state.disable_eval_button
                              ):
                 st.session_state.expandable = True
@@ -476,7 +552,6 @@ def main():
 
 
     if st.session_state.user_input_to_be_processed:
-        print("X")
         st.session_state.waiting_for_AI_response = True
         st.session_state.display_evaluation = False
         st.rerun()  
@@ -485,8 +560,17 @@ def main():
     # to redraw chat without the chat in the with st.spinner("waiting")
     if st.session_state.AI_response_received:
         st.session_state.AI_response_received = False
+        st.session_state.show_message_toast = True
         st.rerun()
 
+    if st.session_state.show_message_toast:
+        st.session_state.show_message_toast = False
+        if show_message_toast:
+            st.toast('Response received successfully!')
+            if st.session_state.last_ai_response_details is not None:
+                for field in st.session_state.last_ai_response_details:
+                    time.sleep(1)
+                    st.toast(str(field) + str (st.session_state.last_ai_response_details[field]))
 
     if st.session_state.evaluate_pressed:
         # we remove eisting evals
@@ -497,11 +581,10 @@ def main():
         st.session_state.disable_user_input = True
         # we do the actual evaluation during next run
         st.session_state.obtain_evaluation = True
-
         st.rerun()
 
     if st.session_state.obtain_evaluation:
-        with st.spinner("Waiting for evaluations"):
+        with st.spinner('Waiting for evaluations'):
             safeguard_ai.obtain_safeguard_evaluation(
                 st.session_state.last_ai_response
             )
@@ -513,8 +596,7 @@ def main():
         st.session_state.display_evaluation = True
         # we reenable the eval button
         st.session_state.disable_eval_button = False
-        print("Y")
         st.rerun()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
