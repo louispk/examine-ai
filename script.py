@@ -16,7 +16,7 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 # set to True to use placeholder evals
 placeholder_eval = False
 # set to True to use placeholder response
-placeholder_response = False
+placeholder_response = True
 # set to true to see a toast with response details
 show_message_toast = False
 
@@ -68,11 +68,12 @@ class OpenAIResponder:
         status = 'ERR'
         details = None
         try:
-            valid_messages = [
-                {'role': msg['role'], 'content': msg['content']}
-                for msg in messages
-                if msg['role'] in ['system', 'assistant', 'user', 'function']
-            ]
+            valid_messages = []
+            for msg in messages:
+                if msg['role'] in ['system', 'assistant', 'user', 'function']:
+                    if status not in msg or msg['status'] == 'OK':
+                        valid_messages.append({'role': msg['role'], 'content': msg['content']})
+
             response = openai.ChatCompletion.create(
                 model=self._model, messages=valid_messages
             )
@@ -88,31 +89,22 @@ class OpenAIResponder:
             return response.choices[0].message['content'], status, details
 
         except openai.error.Timeout as e:
-            #Handle timeout error, e.g. retry or log
             content = f"OpenAI API request timed out: {e}"
         except openai.error.APIError as e:
-            #Handle API error, e.g. retry or log
             content = f"OpenAI API returned an API Error: {e}"
         except openai.error.APIConnectionError as e:
-            #Handle connection error, e.g. check network or log
             content = f"OpenAI API request failed to connect: {e}"
         except openai.error.InvalidRequestError as e:
-            #Handle invalid request error, e.g. validate parameters or log
             content = f"OpenAI API request was invalid: {e}"
         except openai.error.AuthenticationError as e:
-            #Handle authentication error, e.g. check credentials or log
             content = f"OpenAI API request was not authorized: {e}"
         except openai.error.PermissionError as e:
-            #Handle permission error, e.g. check scope or log
             content = f"OpenAI API request was not permitted: {e}"
         except openai.error.RateLimitError as e:
-            #Handle rate limit error, e.g. wait or log
             content = f"OpenAI API request exceeded rate limit: {e}"
 
         print(content)
         return content, status, details
-
-
 
 
 class ChatUI:
