@@ -8,6 +8,7 @@ import random
 from utils import parse_evaluation, get_color, text_to_html, calculate_average, get_random_score
 from prompts import safeguard_assessment
 import time
+from datetime import datetime
 import logging
 
 # Make sure to set the OPENAI_API_KEY in your environment variables.
@@ -16,9 +17,9 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 # set to True to use placeholder evals
 placeholder_eval = False
 # set to True to use placeholder response
-placeholder_response = True
+placeholder_response = False
 # set to true to see a toast with response details
-show_message_toast = False
+show_message_toast = True
 
 # Configure logger
 logging.basicConfig(
@@ -79,6 +80,7 @@ class OpenAIResponder:
             )
 
             details = {}
+            details['received'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             details['finish_reason'] = response.choices[0].finish_reason
             details['created'] = response.created
             details['id'] = response.id 
@@ -103,7 +105,6 @@ class OpenAIResponder:
         except openai.error.RateLimitError as e:
             content = f"OpenAI API request exceeded rate limit: {e}"
 
-        print(content)
         return content, status, details
 
 
@@ -118,16 +119,31 @@ class ChatUI:
             'OK' : 'white',
             'WARN' : 'orange', 
             'ERR' : 'red'
-            }
+        }
         color = mapping[status]
         if color is None:
-            color = 'green'
+            color = 'violet'
         return color
 
     @staticmethod
-    def print_message(message : str):
+    def print_message(message : str, last_msg : bool):
         color = ChatUI.get_color(message['status'])
-        st.markdown(":"+ color + "[" + message['content'] + "]")
+        message_placeholder = st.empty()
+        full_response = ''
+        # we only stream the response once, when we receive it
+        if (st.session_state.streaming and 
+            last_msg and 
+            st.session_state.stream_message and 
+            message['status'] != 'ERR'):
+            for chunk in message['content'].split():
+                full_response += chunk + " "
+                time.sleep(0.05)
+                #message_placeholder.markdown(full_response + "▌")
+                message_placeholder.markdown(full_response + '▌')
+        if color != 'white':
+            message_placeholder.markdown(":"+ color + "[" + message['content'] + "]")
+        else:
+            message_placeholder.markdown(message['content'])
 
     @staticmethod
     def display_messages(column, messages: List[Dict[str, str]]):
@@ -136,15 +152,17 @@ class ChatUI:
             sorted_messages = reversed(messages)
         else:
             sorted_messages = messages
+        msg_ct = len(sorted_messages)
         with column:
-            for message in sorted_messages:
+            for idx, message in enumerate(sorted_messages):
                 role = message['role']
                 if role == 'user':
                     with st.chat_message('user'):
                         st.write(message['content'])
                 elif role == 'assistant':
                     with st.chat_message('assistant'):
-                        ChatUI.print_message(message)
+                        # we only want to stream the last received AI repsonse
+                        ChatUI.print_message(message, idx == msg_ct - 1)
                 else:
                     with st.chat_message(role):
                         st.write(message['content'])
@@ -156,12 +174,15 @@ class ChatUI:
                 with st.spinner('AI is thinking'):
                     # if we are above the messages we draw the convo 
                     # again here so it is visible while spinner spins
-                    if top:
-                        ChatUI.display_messages(col, st.session_state.messages)
+                    #if top:
+                    #    ChatUI.display_messages(col, st.session_state.messages)
+                    if st.session_state.show_user_input:
+                        key = 'my_form_while_spinning_' + 'top' if top else 'bottom'
+                        ChatUI.handle_user_input(key)
                     # now that we have the user input we process the AI response
                     ChatUI.process_AI_response(responder)
             if st.session_state.show_user_input:
-                key = 'my_form_' + 'top' if top else 'bottom'
+                key = 'my_form_' + ('top' if top else 'bottom')
                 ChatUI.handle_user_input(key)
 
     @staticmethod
@@ -180,18 +201,20 @@ class ChatUI:
             submit_button = subcol2.form_submit_button(
                 label='Submit',
                 disabled=st.session_state.disable_user_input
-                )
+            )
+
+            user_input_key = key + '_' + 'user_input_field'
 
             # Check if the form has been submitted
             if submit_button:
-                ChatUI.process_user_input('user_input_field')
+                ChatUI.process_user_input(user_input_key)
                 st.session_state.user_input = ''
 
             user_input.text_input(
                 'Input',
                 label_visibility = 'collapsed',
                 placeholder='Message chatbot...',
-                key='user_input_field',
+                key=user_input_key,
                 disabled=st.session_state.disable_user_input,
             )
 
@@ -203,7 +226,7 @@ class ChatUI:
             st.session_state.messages.append({
                 'role': 'user', 
                 'content': user_input
-                })
+            })
             # Clear the input box after the message is sent
             st.session_state[key] = ''
             # Store the messages using MessageStorage
@@ -211,29 +234,35 @@ class ChatUI:
             message_storage.store_message({
                 'role': 'user', 
                 'content': user_input
-                })
+            })
             
             # we hide the user input until we receive the response
             st.session_state.show_user_input = False
-
             # we need to process the user input we received
             st.session_state.user_input_to_be_processed = True
+            # we disable checkboxes
+            st.session_state.disable_user_input = True
+            # we disable the eval button
+            st.session_state.disable_eval_button = True
 
     def process_AI_response(responder):
+        response = status = details = None
         # Fetch and store the response
         if not placeholder_response:
             response, status, details = responder.get_response(st.session_state.messages)
         else:
             time.sleep(2)
-
-            response, status, details = "This is a placeholder response for testing.", 'OK', ''
-
+            response = ''
+            for i in range (100) :
+                response += 'testing '
             status = random.choice(['OK', 'WARN', 'ERR'])
+
+        # we add the message to the state
         st.session_state.messages.append({
             'role': 'assistant', 
             'content': response, 
             'status' : status
-            })
+        })
         st.session_state.last_ai_response = response
         st.session_state.last_ai_response_details = details
 
@@ -245,15 +274,12 @@ class ChatUI:
             'status' : status
             })
 
-        # We reset this
+        # we reset this
         st.session_state.user_input_to_be_processed = False
         # we received response
         st.session_state.AI_response_received = True
         # we deactivate the spinner 
         st.session_state.waiting_for_AI_response = False
-        # we show the user input again
-        st.session_state.show_user_input = True
-
 
 class SafeguardAI:
     """
@@ -286,12 +312,12 @@ class SafeguardAI:
         else:
             prompt = safeguard_assessment(response, principle)
 
-            model_response = self._responder.get_response(
+            content, status, details = self._responder.get_response(
                 [{'role': 'system', 'content': prompt}]
             )
-            logger.info(model_response)
+            logger.info(content)
         
-            score, assessment = parse_evaluation(model_response)
+            score, assessment = parse_evaluation(content)
             return (score, assessment) 
 
     def _get_safety_scores(self, response: str) -> Dict[str, Tuple[str, str]]:
@@ -430,21 +456,87 @@ class SafeguardAI:
             self._display_normal(column)
 
 
-def toggle_msg_order():
-    st.session_state.reversed = not st.session_state.reversed
-
-
 def main():
-    st.set_page_config(page_title='examine|AI', 
-                       page_icon='🧞‍♂️', 
-                       layout='wide', 
-                       menu_items={
-                           'Get Help': "https://examine.dev/#building-ai-meta-systems",
-                           'Report a bug': "https://examine.dev/#team",
-                           'About': "### ExamineAI 2023"
-    }
-                       )
+    st.set_page_config(
+        page_title='examine|AI', 
+        page_icon='🧞‍♂️', 
+        layout='wide', 
+        initial_sidebar_state='expanded', # 'auto', 'expanded', 'collapsed'
+        menu_items={
+            'Get Help': "https://examine.dev/#building-ai-meta-systems",
+            'Report a bug': "https://examine.dev/#team",
+            'About': "### ExamineAI 2023"
+        }
+    )
     st.session_state.theme = 'dark'
+
+    # Ensures messages are initialized in session state
+    MessageStorage()  
+    # Initialize session state
+    default_session_state = {
+          'last_ai_response': None,
+          'last_ai_response_details' : None,
+          'evaluate_pressed': False,
+          'disable_eval_button': False,
+          'obtain_evaluation': False,
+          'display_evaluation': False,
+          'reversed': False,
+          'expandable': False,
+          'evals': None,
+          'user_input_to_be_processed': False,
+          'show_user_input': True,
+          'disable_user_input': False,
+          'waiting_for_AI_response': False,
+          'AI_response_received': False,
+          'show_message_toast' : False,
+          'streaming' : False,
+          'stream_message' : True,
+          'model_id' : 'gpt-3.5-turbo',
+          'evaluations_received' : False
+          }
+    for key, default_value in default_session_state.items():
+          if key not in st.session_state:
+              st.session_state[key] = default_value
+
+    with st.sidebar:
+        st.title('Settings')
+        selected_model_id = st.selectbox(
+            'Selected Model',
+            ['gpt-3.5-turbo', 'gpt-3.5-turbo-16k',
+             'gpt-4', 'gpt-4-32k'],
+             key='select_model',
+             label_visibility='visible',
+             disabled=st.session_state.disable_user_input)
+
+        if selected_model_id != st.session_state.model_id:
+            st.session_state.model_id = selected_model_id
+            st.toast('Primary AI model set to ' + st.session_state.model_id)
+        
+        if st.checkbox(
+            'Reversed', 
+            key='reversed_checkbox',
+            disabled=st.session_state.disable_user_input,
+            value = st.session_state.reversed,
+        ):
+            st.session_state.reversed = True
+        else:
+            st.session_state.reversed = False
+
+        if st.checkbox(
+            'Streaming (experimental)',
+            key='streaming_checkbox',
+            disabled=st.session_state.disable_user_input,
+            value=st.session_state.streaming,
+        ):
+            st.session_state.streaming = True
+        else:
+            st.session_state.streaming = False
+
+        with st.expander('Info', expanded=False):
+            if st.session_state.last_ai_response_details is not None:
+                for field in st.session_state.last_ai_response_details:
+                    st.write(str(field) + ': ' + str(st.session_state.last_ai_response_details[field]))
+
 
     col1, col2 = st.columns([1, 5])  # Adjust the ratio as needed
     with col1:
@@ -469,49 +561,15 @@ def main():
     responder = OpenAIResponder(api_key=openai.api_key)
     safeguard_ai = SafeguardAI(responder)
     
-    # Ensures messages are initialized in session state
-    MessageStorage()  
-    # Initialize session state
-    default_session_state = {
-          'last_ai_response': None,
-          'last_ai_response_details' : None,
-          'evaluate_pressed': False,
-          'disable_eval_button': False,
-          'obtain_evaluation': False,
-          'display_evaluation': False,
-          'reversed': False,
-          'expandable': False,
-          'evals': None,
-          'user_input_to_be_processed': False,
-          'show_user_input': True,
-          'disable_user_input': False,
-          'waiting_for_AI_response': False,
-          'AI_response_received': False,
-          'show_message_toast' : False,
-      }
-    for key, default_value in default_session_state.items():
-          if key not in st.session_state:
-              st.session_state[key] = default_value
-
     col1, col2 = st.columns(2, gap='medium')
 
     with col1:
-        st.subheader('Primary AI',
-                     anchor=False)
-        subcol1, subcol2 = col1.columns([1, 2])
-        model_id = subcol1.selectbox('Selected Model',
-                                     ['gpt-3.5-turbo', 'gpt-3.5-turbo-16k',
-                                      'gpt-4', 'gpt-4-32k'],
-                                      label_visibility = 'collapsed',
-                                      disabled=st.session_state.disable_user_input
-                                      or not st.session_state.show_user_input)
+        st.subheader('Primary AI', anchor=False)
         
-        subcol2.checkbox('Reversed', 
-                         on_change=toggle_msg_order,
-                         disabled=st.session_state.disable_user_input
-                         or not st.session_state.show_user_input)
         # Define Primary AI responder
-        primary_AI_responder = OpenAIResponder(api_key=openai.api_key, model = model_id)
+        primary_AI_responder = OpenAIResponder(
+            api_key = openai.api_key, 
+            model = st.session_state.model_id)
 
         # We put the input below or above the messages depending on the reversed status
         ChatUI.display_chat_input(col1, primary_AI_responder, top = True)
@@ -521,48 +579,80 @@ def main():
         
     # Safeguard AI column
     with col2:
-        st.subheader('Safeguard AI',
-                     anchor=False)
+        st.subheader('Safeguard AI', anchor=False)
         subcol1, subcol2 = col2.columns([1, 2])
-        if st.session_state.last_ai_response:
-            if subcol1.button('Evaluate', 
-                              key='evaluate', 
-                              disabled=st.session_state.disable_eval_button
-                              ):
+        if st.session_state.last_ai_response is not None:
+            if subcol1.button(
+                'Evaluate', 
+                key='evaluate', 
+                disabled=st.session_state.disable_eval_button
+            ):
                 st.session_state.evaluate_pressed = True
                 st.session_state.disable_eval_button = True
-            if subcol2.checkbox('Expandable', 
-                             disabled=st.session_state.disable_eval_button
-                             ):
+
+            if subcol2.checkbox(
+                'Expandable', 
+                key='expandable_checkbox',
+                disabled=st.session_state.disable_eval_button
+            ):
                 st.session_state.expandable = True
             else:
                 st.session_state.expandable = False
 
+        if st.session_state.obtain_evaluation:
+            with st.spinner('Waiting for evaluations'):
+                safeguard_ai.obtain_safeguard_evaluation(
+                    st.session_state.last_ai_response
+                )
+                st.session_state.evaluations_received = True
+
+    #
+    # Here we handle state
+
+    if st.session_state.evaluations_received:
+        st.session_state.evaluations_received = False
+        # we reenable user input after evaluations are shown
+        st.session_state.disable_user_input = False
+        # we reset this abter we obtained the evaluations
+        st.session_state.obtain_evaluation = False
+        # we can show the evaluation now
+        st.session_state.display_evaluation = True
+        # we reenable the eval button
+        st.session_state.disable_eval_button = False
+        st.rerun()
+
+
     # we display the evals from the safeguard AI
     if st.session_state.display_evaluation:
         safeguard_ai.display_safeguard_evaluation(col2)
-
 
     if st.session_state.user_input_to_be_processed:
         st.session_state.waiting_for_AI_response = True
         st.session_state.display_evaluation = False
         st.rerun()  
 
-    # we do a rerun after receiving the AI response
-    # to redraw chat without the chat in the with st.spinner("waiting")
     if st.session_state.AI_response_received:
         st.session_state.AI_response_received = False
+        #st.session_state.show_message_toast = True
+        st.session_state.stream_message = True
+        st.rerun()
+
+    if st.session_state.stream_message:
+        st.session_state.stream_message = False
+        # we reactivate deactivated inputs
+        st.session_state.disable_user_input = False
+        # we reactivate the eval button
+        st.session_state.disable_eval_button = False
+        # we show the user text input again
+        st.session_state.show_user_input = True
         st.session_state.show_message_toast = True
+
         st.rerun()
 
     if st.session_state.show_message_toast:
         st.session_state.show_message_toast = False
         if show_message_toast:
             st.toast('Response received successfully!')
-            if st.session_state.last_ai_response_details is not None:
-                for field in st.session_state.last_ai_response_details:
-                    time.sleep(1)
-                    st.toast(str(field) + str (st.session_state.last_ai_response_details[field]))
 
     if st.session_state.evaluate_pressed:
         # we remove eisting evals
@@ -573,21 +663,6 @@ def main():
         st.session_state.disable_user_input = True
         # we do the actual evaluation during next run
         st.session_state.obtain_evaluation = True
-        st.rerun()
-
-    if st.session_state.obtain_evaluation:
-        with st.spinner('Waiting for evaluations'):
-            safeguard_ai.obtain_safeguard_evaluation(
-                st.session_state.last_ai_response
-            )
-        # we reenable user input after evaluations are shown
-        st.session_state.disable_user_input = False
-        # we reset this abter we obtained the evaluations
-        st.session_state.obtain_evaluation = False
-        # we can show the evaluation now
-        st.session_state.display_evaluation = True
-        # we reenable the eval button
-        st.session_state.disable_eval_button = False
         st.rerun()
 
 if __name__ == '__main__':
