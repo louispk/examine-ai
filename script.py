@@ -149,7 +149,7 @@ class ChatUI:
     def display_messages(column, messages: List[Dict[str, str]]):
         #"""Displays messages in a Streamlit chat."""
         if st.session_state.reversed:
-            sorted_messages = reversed(messages)
+            sorted_messages = list(reversed(messages))
         else:
             sorted_messages = messages
         msg_ct = len(sorted_messages)
