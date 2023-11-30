@@ -1,5 +1,9 @@
 # README
 
+## DEPRECATED
+ALL FURTHER DEVELOPMENT CAN BE FOUND HERE: https://github.com/OpenBioLink/examine-ai
+
+
 ## Overview
 
 This repository contains the code for `examine|AI`, a Streamlit-based web application that provides an interactive chat interface with an AI (built using OpenAI's GPT model). The application includes a safeguard system that evaluates AI responses against safety principles, aiming to foster trustworthy conversations with AI.
